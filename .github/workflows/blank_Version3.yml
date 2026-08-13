@@ -20,9 +20,9 @@ on:
         required: true
         default: "lineage-20.0"
       ARCHIVE_LEVEL:
-        description: "Zstd Compression Level (1-19, 6 recommended)"
+        description: "Zstd Compression Level (1-19, 15 chosen)"
         required: true
-        default: "6"
+        default: "15"
 
 jobs:
   export-source:
@@ -68,7 +68,6 @@ jobs:
         run: |
           mkdir -p "$HOME/lineage/.repo/local_manifests"
           
-          # Removable candidates list
           REMOVALS=(
             "LineageOS/android_external_chromium-webview"
             "LineageOS/android_packages_apps_Aperture"
@@ -104,7 +103,6 @@ jobs:
           echo '<?xml version="1.0" encoding="UTF-8"?>' > "$MANIFEST_FILE"
           echo '<manifest>' >> "$MANIFEST_FILE"
 
-          # Only remove projects if they actually exist in default manifest
           for proj in "${REMOVALS[@]}"; do
             if grep -q "name=\"$proj\"" "$HOME/lineage/.repo/manifest.xml" "$HOME/lineage/.repo/manifests/"*.xml 2>/dev/null; then
               echo "  <remove-project name=\"$proj\" />" >> "$MANIFEST_FILE"
@@ -121,12 +119,18 @@ jobs:
           repo sync -c --no-clone-bundle --no-tags --prune --force-sync -j$(nproc --all)
           df -h
 
-      - name: Clone Device Tree
+      - name: Clone Device Tree (With Smart Branch Fallback)
         run: |
           cd "$HOME/lineage"
           mkdir -p "device/${{ inputs.VENDOR }}"
-          git clone --depth=1 -b "${{ inputs.DT_BRANCH }}" "${{ inputs.DT_URL }}" \
-            "device/${{ inputs.VENDOR }}/${{ inputs.DEVICE_CODENAME }}"
+          TARGET_DIR="device/${{ inputs.VENDOR }}/${{ inputs.DEVICE_CODENAME }}"
+          
+          echo "Cloning device tree from ${{ inputs.DT_URL }}..."
+          
+          if ! git clone --depth=1 -b "${{ inputs.DT_BRANCH }}" "${{ inputs.DT_URL }}" "$TARGET_DIR"; then
+            echo "⚠️ Branch '${{ inputs.DT_BRANCH }}' not found! Cloning default branch..."
+            git clone --depth=1 "${{ inputs.DT_URL }}" "$TARGET_DIR"
+          fi
 
       - name: Delete .repo Directory (Save ~15GB Space)
         run: |
@@ -157,4 +161,3 @@ jobs:
             ${{ github.workspace }}/lineage20-recovery-source-${{ inputs.DEVICE_CODENAME }}.tar.zst.sha256
           if-no-files-found: error
           retention-days: 7
-          
