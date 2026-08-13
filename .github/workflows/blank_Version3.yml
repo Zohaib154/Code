@@ -20,7 +20,7 @@ on:
         required: true
         default: "lineage-20.0"
       ARCHIVE_LEVEL:
-        description: "Zstd Compression Level (1-19, 6 is recommended)"
+        description: "Zstd Compression Level (1-19, 6 recommended)"
         required: true
         default: "6"
 
@@ -62,7 +62,7 @@ jobs:
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
           repo init -u https://github.com/LineageOS/android.git -b lineage-20.0 \
-            --depth=1 --git-lfs --filter=blob:none
+            --depth=1 --git-lfs --clone-filter=blob:none
 
       - name: Apply Ultra-Minimal Manifest (Remove ALL non-recovery repos)
         run: |
