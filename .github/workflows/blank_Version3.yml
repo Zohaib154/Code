@@ -1,0 +1,138 @@
+name: Export LineageOS 20 Minimal Synced Source
+
+on:
+  workflow_dispatch:
+    inputs:
+      DEVICE_CODENAME:
+        description: "Device codename (e.g. sunfish, raven, payton)"
+        required: true
+        default: "sunfish"
+      VENDOR:
+        description: "Device vendor (e.g. google, motorola, xiaomi)"
+        required: true
+        default: "google"
+      DT_URL:
+        description: "Device tree Git URL"
+        required: true
+        default: "https://github.com/LineageOS/android_device_google_sunfish"
+      DT_BRANCH:
+        description: "Device tree branch"
+        required: true
+        default: "lineage-20.0"
+      ARCHIVE_LEVEL:
+        description: "Compression level (1-19, higher = smaller but slower)"
+        required: true
+        default: "6"
+
+jobs:
+  export-source:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+
+    steps:
+      - name: Free disk space
+        run: |
+          echo "Before cleanup:"
+          df -h
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /usr/share/swift \
+                      /usr/local/share/boost /opt/ghc /usr/local/graalvm /var/lib/docker
+          sudo apt-get clean
+          echo "After cleanup:"
+          df -h
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git git-lfs curl python3 python-is-python3 zstd xz-utils rsync
+
+      - name: Setup repo tool
+        run: |
+          mkdir -p "$HOME/bin"
+          curl -L https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
+          chmod +x "$HOME/bin/repo"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Init LineageOS source (shallow + blobless)
+        run: |
+          mkdir -p "$HOME/lineage"
+          cd "$HOME/lineage"
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          repo init -u https://github.com/LineageOS/android.git -b lineage-20.0 \
+            --depth=1 --git-lfs --partial-clone --clone-filter=blob:none
+
+      - name: Add local manifest (remove heavy repos)
+        run: |
+          mkdir -p "$HOME/lineage/.repo/local_manifests"
+          cat > "$HOME/lineage/.repo/local_manifests/minimal_source.xml" <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <manifest>
+            <remove-project name="LineageOS/android_external_chromium-webview" />
+            <remove-project name="LineageOS/android_packages_apps_Aperture" />
+            <remove-project name="LineageOS/android_packages_apps_Browser2" />
+            <remove-project name="LineageOS/android_packages_apps_Calendar" />
+            <remove-project name="LineageOS/android_packages_apps_CalendarProvider" />
+            <remove-project name="LineageOS/android_packages_apps_Contacts" />
+            <remove-project name="LineageOS/android_packages_apps_DeskClock" />
+            <remove-project name="LineageOS/android_packages_apps_Dialer" />
+            <remove-project name="LineageOS/android_packages_apps_Eleven" />
+            <remove-project name="LineageOS/android_packages_apps_Email" />
+            <remove-project name="LineageOS/android_packages_apps_Gallery2" />
+            <remove-project name="LineageOS/android_packages_apps_Jelly" />
+            <remove-project name="LineageOS/android_packages_apps_Launcher3" />
+            <remove-project name="LineageOS/android_packages_apps_Messaging" />
+            <remove-project name="LineageOS/android_packages_apps_Recorder" />
+            <remove-project name="LineageOS/android_packages_apps_Settings" />
+            <remove-project name="LineageOS/android_packages_apps_Trebuchet" />
+            <remove-project name="LineageOS/android_packages_inputmethods_LatinIME" />
+            <remove-project name="LineageOS/android_cts" />
+            <remove-project name="LineageOS/android_pdk" />
+            <remove-project name="LineageOS/android_platform_testing" />
+          </manifest>
+          EOF
+
+      - name: Sync minimal source
+        run: |
+          cd "$HOME/lineage"
+          repo sync -c --no-clone-bundle --no-tags --optimized-fetch --prune --force-sync -j4
+          df -h
+
+      - name: Clone device tree
+        run: |
+          cd "$HOME/lineage"
+          mkdir -p "device/${{ inputs.VENDOR }}"
+          git clone --depth=1 -b "${{ inputs.DT_BRANCH }}" "${{ inputs.DT_URL }}" \
+            "device/${{ inputs.VENDOR }}/${{ inputs.DEVICE_CODENAME }}"
+
+      - name: Remove volatile/heavy git metadata before archive
+        run: |
+          cd "$HOME/lineage"
+          # Keep working source, remove unnecessary cache/log files to shrink archive
+          find .repo -type f \( -name "*.log" -o -name "*.tmp" \) -delete || true
+          rm -rf .repo/repo/.git || true
+          rm -rf .repo/projects/*/*.git/objects/pack/tmp_* || true
+          du -sh "$HOME/lineage" || true
+
+      - name: Create compressed source archive (.tar.zst)
+        run: |
+          cd "$HOME"
+          ARCHIVE="lineage20-minimal-source-${{ inputs.DEVICE_CODENAME }}.tar.zst"
+          LEVEL="${{ inputs.ARCHIVE_LEVEL }}"
+
+          echo "Compressing source as $ARCHIVE (zstd level: $LEVEL)"
+          tar --use-compress-program="zstd -${LEVEL} -T0" \
+              -cf "$ARCHIVE" lineage
+
+          ls -lh "$ARCHIVE"
+          sha256sum "$ARCHIVE" > "${ARCHIVE}.sha256"
+          cat "${ARCHIVE}.sha256"
+
+      - name: Upload source archive artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lineage20-minimal-source-${{ inputs.DEVICE_CODENAME }}
+          path: |
+            ~/lineage20-minimal-source-${{ inputs.DEVICE_CODENAME }}.tar.zst
+            ~/lineage20-minimal-source-${{ inputs.DEVICE_CODENAME }}.tar.zst.sha256
+          if-no-files-found: error
+          retention-days: 7
