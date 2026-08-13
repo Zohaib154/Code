@@ -64,49 +64,56 @@ jobs:
           repo init -u https://github.com/LineageOS/android.git -b lineage-20.0 \
             --depth=1 --git-lfs --clone-filter=blob:none
 
-      - name: Apply Ultra-Minimal Manifest (Remove ALL non-recovery repos)
+      - name: Safely Generate Minimal Manifest (Dynamic Project Removal)
         run: |
           mkdir -p "$HOME/lineage/.repo/local_manifests"
-          cat > "$HOME/lineage/.repo/local_manifests/recovery_only.xml" <<'EOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <manifest>
-            <!-- Heavy Engines & Webview -->
-            <remove-project name="LineageOS/android_external_chromium-webview" />
-            
-            <!-- ALL System Applications (Not needed for Recovery) -->
-            <remove-project name="LineageOS/android_packages_apps_Aperture" />
-            <remove-project name="LineageOS/android_packages_apps_Browser2" />
-            <remove-project name="LineageOS/android_packages_apps_Calendar" />
-            <remove-project name="LineageOS/android_packages_apps_CalendarProvider" />
-            <remove-project name="LineageOS/android_packages_apps_Contacts" />
-            <remove-project name="LineageOS/android_packages_apps_DeskClock" />
-            <remove-project name="LineageOS/android_packages_apps_Dialer" />
-            <remove-project name="LineageOS/android_packages_apps_Eleven" />
-            <remove-project name="LineageOS/android_packages_apps_Email" />
-            <remove-project name="LineageOS/android_packages_apps_Gallery2" />
-            <remove-project name="LineageOS/android_packages_apps_Jelly" />
-            <remove-project name="LineageOS/android_packages_apps_Launcher3" />
-            <remove-project name="LineageOS/android_packages_apps_Messaging" />
-            <remove-project name="LineageOS/android_packages_apps_Recorder" />
-            <remove-project name="LineageOS/android_packages_apps_Settings" />
-            <remove-project name="LineageOS/android_packages_apps_Trebuchet" />
-            <remove-project name="LineageOS/android_packages_apps_Updater" />
-            <remove-project name="LineageOS/android_packages_apps_Glimpse" />
+          
+          # Removable candidates list
+          REMOVALS=(
+            "LineageOS/android_external_chromium-webview"
+            "LineageOS/android_packages_apps_Aperture"
+            "LineageOS/android_packages_apps_Browser2"
+            "LineageOS/android_packages_apps_Calendar"
+            "LineageOS/android_packages_apps_CalendarProvider"
+            "LineageOS/android_packages_apps_Contacts"
+            "LineageOS/android_packages_apps_DeskClock"
+            "LineageOS/android_packages_apps_Dialer"
+            "LineageOS/android_packages_apps_Eleven"
+            "LineageOS/android_packages_apps_Email"
+            "LineageOS/android_packages_apps_Gallery2"
+            "LineageOS/android_packages_apps_Jelly"
+            "LineageOS/android_packages_apps_Launcher3"
+            "LineageOS/android_packages_apps_Messaging"
+            "LineageOS/android_packages_apps_Recorder"
+            "LineageOS/android_packages_apps_Settings"
+            "LineageOS/android_packages_apps_Trebuchet"
+            "LineageOS/android_packages_apps_Updater"
+            "LineageOS/android_packages_apps_Glimpse"
+            "LineageOS/android_packages_inputmethods_LatinIME"
+            "LineageOS/android_packages_providers_BookmarkProvider"
+            "LineageOS/android_packages_providers_CalendarProvider"
+            "LineageOS/android_packages_providers_ContactsProvider"
+            "LineageOS/android_packages_providers_MediaProvider"
+            "LineageOS/android_packages_services_Telephony"
+            "LineageOS/android_cts"
+            "LineageOS/android_pdk"
+            "LineageOS/android_platform_testing"
+          )
 
-            <!-- Providers & Input Methods -->
-            <remove-project name="LineageOS/android_packages_inputmethods_LatinIME" />
-            <remove-project name="LineageOS/android_packages_providers_BookmarkProvider" />
-            <remove-project name="LineageOS/android_packages_providers_CalendarProvider" />
-            <remove-project name="LineageOS/android_packages_providers_ContactsProvider" />
-            <remove-project name="LineageOS/android_packages_providers_MediaProvider" />
-            <remove-project name="LineageOS/android_packages_services_Telephony" />
+          MANIFEST_FILE="$HOME/lineage/.repo/local_manifests/recovery_only.xml"
+          echo '<?xml version="1.0" encoding="UTF-8"?>' > "$MANIFEST_FILE"
+          echo '<manifest>' >> "$MANIFEST_FILE"
 
-            <!-- Test Suites & Docs -->
-            <remove-project name="LineageOS/android_cts" />
-            <remove-project name="LineageOS/android_pdk" />
-            <remove-project name="LineageOS/android_platform_testing" />
-          </manifest>
-          EOF
+          # Only remove projects if they actually exist in default manifest
+          for proj in "${REMOVALS[@]}"; do
+            if grep -q "name=\"$proj\"" "$HOME/lineage/.repo/manifest.xml" "$HOME/lineage/.repo/manifests/"*.xml 2>/dev/null; then
+              echo "  <remove-project name=\"$proj\" />" >> "$MANIFEST_FILE"
+              echo "Removing existing project: $proj"
+            fi
+          done
+
+          echo '</manifest>' >> "$MANIFEST_FILE"
+          cat "$MANIFEST_FILE"
 
       - name: Sync Minimal Source Repositories
         run: |
