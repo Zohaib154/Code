@@ -1,0 +1,142 @@
+name: Build LineageOS 20 Recovery (Low Storage)
+
+on:
+  workflow_dispatch:
+    inputs:
+      DEVICE_CODENAME:
+        description: 'Device Codename (e.g. sunfish, raven, payton)'
+        required: true
+        default: 'sunfish'
+      VENDOR:
+        description: 'Device Vendor (e.g. google, motorola, xiaomi)'
+        required: true
+        default: 'google'
+      DT_URL:
+        description: 'Device Tree Git Repository URL'
+        required: true
+        default: 'https://github.com/LineageOS/android_device_google_sunfish'
+      DT_BRANCH:
+        description: 'Device Tree Branch'
+        required: true
+        default: 'lineage-20.0'
+      BUILD_TARGET:
+        description: 'Recovery Target Type'
+        required: true
+        type: choice
+        options:
+          - 'recoveryimage'
+          - 'bootimage'
+          - 'vendor_bootimage'
+        default: 'recoveryimage'
+
+jobs:
+  build-recovery:
+    name: Build & Compress Lineage 20 Recovery
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Free Disk Space on GitHub Runner
+        run: |
+          echo "Clearing unused tools to free ~30GB disk space..."
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /usr/share/swift \
+                      /usr/local/share/boost /opt/ghc /usr/local/graalvm/ /var/lib/docker
+          sudo apt-get clean
+          df -h
+
+      - name: Install Build & Compression Dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y bc bison build-essential ccache curl flex g++-multilib \
+            gcc-multilib git git-lfs gnupg gperf imagemagick lib32ncurses5-dev \
+            lib32readline-dev lib32z1-dev libelf-dev libgl1-mesa-dev libxml2-utils \
+            lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev \
+            python3 python-is-python3 xz-utils
+
+      - name: Setup Repo Tool
+        run: |
+          mkdir -p ~/bin
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+          chmod a+x ~/bin/repo
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      - name: Initialize LineageOS 20 Minimal Source
+        run: |
+          mkdir -p ~/lineage
+          cd ~/lineage
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          
+          # Initialize LineageOS 20 with shallow depth & blobless filter
+          repo init -u https://github.com/LineageOS/android.git -b lineage-20.0 --depth=1 --filter=blob:none
+
+      - name: Apply Exclude Local Manifest (Strip Non-Recovery Repos)
+        run: |
+          mkdir -p ~/lineage/.repo/local_manifests
+          cat << 'EOF' > ~/lineage/.repo/local_manifests/exclude.xml
+          <?xml version="1.0" encoding="UTF-8"?>
+          <manifest>
+            <!-- Exclude heavy webview & apps -->
+            <remove-project name="LineageOS/android_external_chromium-webview" />
+            <remove-project name="LineageOS/android_packages_apps_Settings" />
+            <remove-project name="LineageOS/android_packages_apps_Jelly" />
+            <remove-project name="LineageOS/android_packages_apps_Eleven" />
+            <remove-project name="LineageOS/android_packages_apps_Aperture" />
+            <remove-project name="LineageOS/android_packages_apps_Recorder" />
+            <!-- Exclude testing suites -->
+            <remove-project name="LineageOS/android_cts" />
+            <remove-project name="LineageOS/android_pdk" />
+            <remove-project name="LineageOS/android_platform_testing" />
+          </manifest>
+          EOF
+
+      - name: Sync Minimal Source Repositories
+        run: |
+          cd ~/lineage
+          repo sync -c --no-clone-bundle --no-tags -j$(nproc --all)
+
+      - name: Clone Device Tree
+        run: |
+          cd ~/lineage
+          git clone ${{ inputs.DT_URL }} -b ${{ inputs.DT_BRANCH }} device/${{ inputs.VENDOR }}/${{ inputs.DEVICE_CODENAME }} --depth=1
+
+      - name: Compile LineageOS 20 Recovery
+        run: |
+          cd ~/lineage
+          export ALLOW_MISSING_DEPENDENCIES=true
+          export RECOVERY_VARIANT=lineage
+          source build/envsetup.sh
+          
+          # Initialize target device
+          breakfast ${{ inputs.DEVICE_CODENAME }} || lunch lineage_${{ inputs.DEVICE_CODENAME }}-userdebug
+          
+          # Build selected target
+          mka ${{ inputs.BUILD_TARGET }}
+
+      - name: Ultra-Compress Output Image (XZ Extreme)
+        run: |
+          cd ~/lineage/out/target/product/${{ inputs.DEVICE_CODENAME }}
+          
+          if [ "${{ inputs.BUILD_TARGET }}" = "recoveryimage" ]; then
+            TARGET_FILE="recovery.img"
+          elif [ "${{ inputs.BUILD_TARGET }}" = "bootimage" ]; then
+            TARGET_FILE="boot.img"
+          elif [ "${{ inputs.BUILD_TARGET }}" = "vendor_bootimage" ]; then
+            TARGET_FILE="vendor_boot.img"
+          fi
+
+          if [ -f "$TARGET_FILE" ]; then
+            echo "Compressing $TARGET_FILE using XZ Extreme -9e..."
+            xz -9e -k "$TARGET_FILE"
+            ls -lh "$TARGET_FILE"*
+          else
+            echo "Build failed: $TARGET_FILE not found!"
+            exit 1
+          fi
+
+      - name: Upload Ultra-Compressed Recovery Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lineage20-Recovery-${{ inputs.DEVICE_CODENAME }}
+          path: |
+            ~/lineage/out/target/product/${{ inputs.DEVICE_CODENAME }}/*.img.xz
+          retention-days: 7
